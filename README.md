@@ -1,5 +1,7 @@
-# ACLED_Anomaly_Detection
-
+# ACLED_Anomaly_Detection  
+  
+Original work: https://github.com/Ethan-Harris0n/ACLED_Anomaly_Detection
+  
 - Conflict_Spike_Detection.ipynb: Original Core Script
 - Conflict_Spike_Nigeria_Webinar.ipynb: Is just the script used for the webinar - it does have some potentially useful code for generating anomaly detection at different admin levels / actor subsets but it needs to be standardized / optimized
 ### Next Steps ###
