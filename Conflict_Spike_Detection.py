@@ -69,7 +69,7 @@ df1['TimeFK_Event_Date'] = df1['TimeFK_Event_Date'].apply(lambda x: convert_dt(x
 
 class AnomalyEvent:
     def __init__(self, df, date_col):
-        if is_datetime(df1[date_col]):
+        if is_datetime(df[date_col]):
             self.df = df
             self.date_col = date_col
         else:
