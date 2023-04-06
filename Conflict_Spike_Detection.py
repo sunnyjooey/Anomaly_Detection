@@ -30,15 +30,18 @@ from sklearn.ensemble import IsolationForest
 
 # COMMAND ----------
 
-from keys import keys
+from pyspark.sql import SparkSession
+from pyspark.dbutils import DBUtils
 
-# ACLED data
-database_host = keys["database_host"]
-database_port = keys["database_port"]
-database_name = keys["database_name"]
-user = keys["user"]
-password = keys["password"]
+spark = SparkSession.builder.getOrCreate()
+dbutils = DBUtils(spark)
 
+database_host = dbutils.secrets.get(scope='warehouse_scope', key='database_host')
+database_port = dbutils.secrets.get(scope='warehouse_scope', key='database_port')
+user = dbutils.secrets.get(scope='warehouse_scope', key='user')
+password = dbutils.secrets.get(scope='warehouse_scope', key='password')
+
+database_name = "UNDP_DW_CRD"
 table = "dbo.CRD_ACLED"
 url = f"jdbc:sqlserver://{database_host}:{database_port};databaseName={database_name};"
 
