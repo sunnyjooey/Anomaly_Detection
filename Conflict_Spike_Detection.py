@@ -8,13 +8,11 @@
 
 # COMMAND ----------
 
-# do NOT use another version of statsmodel!
-!pip install statsmodels==0.12.0
+!pip install statsmodels
 !pip install adtk
 
 # COMMAND ----------
 
-#Basic
 import numpy as np
 import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype as is_datetime
@@ -22,7 +20,6 @@ from pandas.core.reshape.merge import merge_asof
 import datetime as dt
 import matplotlib.pyplot as plt
 
-#Packates
 import adtk
 from adtk.detector import PersistAD
 from adtk.visualization import plot
@@ -55,7 +52,7 @@ df1 = (spark.read
 )
 
 df1 = df1.filter(df1.CountryFK==201)
-df1 = df1.toPandas()
+df = df1.toPandas()
 
 # COMMAND ----------
 
@@ -66,7 +63,7 @@ def convert_dt(value):
     date_clean = dt.datetime(year=int(valstr[0:4]), month=int(valstr[4:6]), day=int(valstr[6:8]))
     return date_clean
 
-df1['TimeFK_Event_Date'] = df1['TimeFK_Event_Date'].apply(lambda x: convert_dt(x))
+df['TimeFK_Event_Date'] = df['TimeFK_Event_Date'].apply(lambda x: convert_dt(x))
 
 # COMMAND ----------
 
@@ -78,50 +75,57 @@ class AnomalyEvent:
         else:
             raise Exception("The 'date_col' must be a datetime column")
         self.processed_df = None
+        self.process_params = None
 
     
-    def process_df(self, sum_count, df_col_dict, date_filter={}, admin_filter={}):
+    def process_df(self, target_dict, time_intvl, filter_dict={}, date_dict={}):
         ##### filter
-        # filter to subset of data by admin
-        if len(admin_filter) != 0:
-            df = self.df
-            df = df.loc[df[admin_filter['admin_col']] == admin_filter['col_val'], :]
-        else:
-            df = self.df
-
         # filter to subset of data by date
-        if len(date_filter) != 0:
-            df = df.loc[(df[self.date_col] >= date_filter['start_date']) & (df[self.date_col] <= date_filter['end_date']), :]
-
-        # filter to subset of data by column value
-        if 'col_val' in df_col_dict.keys():
-            df = df.loc[df[df_col_dict['df_col']] == df_col_dict['col_val'], :]
-        
-        #### sum or count
-        # sum (like fatalities) or count (where each row is an event) 
-        if sum_count == 'sum':
-            process_df = df.groupby([self.date_col]).agg({df_col_dict['df_col']:'sum'})
-        elif sum_count == 'count':
-            process_df = df[[self.date_col, df_col_dict['df_col']]].groupby([self.date_col]).count()
+        if len(date_dict) != 0:
+            df = self.df.loc[(self.df[self.date_col] >= date_dict['start_date']) & (self.df[self.date_col] <= date_dict['end_date']), :]
         else:
-            raise Exception("sum_count must be 'sum' or 'count'")
-        process_df.rename(columns={df_col_dict['df_col']: 'num'}, inplace=True)
+            df = self.df
+
+        # filter to subset of data by column values
+        for col, val_lst in filter_dict.items():
+            df = df.loc[df[col].isin(val_lst), :]
+        
+        ##### agg 
+        df_col = target_dict['tgt_col']
+        sum_count = target_dict['agg_typ']
+        if sum_count == 'sum':
+            process_df = df.groupby([self.date_col]).agg({df_col:'sum'})
+        elif sum_count == 'count':
+            process_df = df[[self.date_col, df_col]].groupby([self.date_col]).count()
+        else:
+            raise Exception("'agg_typ' in 'target_dict' must be 'sum' or 'count'")
+        process_df.rename(columns={df_col: 'num'}, inplace=True)
+        
+        ##### time intervals
+        process_df = process_df.resample(time_intvl).sum().fillna(0)
+        
+        ##### save params
+        tm = dt.datetime.now().strftime("%Y%m%d%H%M%S")
+        idx = f'{df_col}_{sum_count}_{time_intvl}_{tm}'
+        target_dict.update({'time_intvl': time_intvl, 'id': idx})
+        target_dict.update(filter_dict)
+        target_dict.update(date_dict)
         
         ##### set attribute
         self.processed_df = process_df
+        self.process_params = target_dict
     
     
-    def get_anomaly(self, time_intvl, anom, anom_dict, graph=True):
+    def get_anomaly(self, anom, anom_dict, graph=True):
         if self.processed_df is None:
             raise Exception("'process_df' first!")
-        
-        ##### date intervals
-        processed_df = self.processed_df.resample(time_intvl).sum().fillna(0)
+        else:
+            processed_df = self.processed_df.copy()
         
         ##### rolling window
         if anom == 'rw':
             persist_ad = PersistAD(**anom_dict)
-            processed_df['anomaly'] = persist_ad.fit_detect(processed_df)
+            processed_df['anomaly'] = persist_ad.fit_detect(processed_df['num'])
         elif anom == 'iso':
             IForest = IsolationForest(**anom_dict)
             iso_anom = IForest.fit_predict(np.array(processed_df['num']).reshape(-1,1))
@@ -134,23 +138,28 @@ class AnomalyEvent:
     
         ##### save params
         anom_dict.update({'algos': anom})
-        processed_df['params'] = [anom_dict] * processed_df.shape[0]
+        processed_df['process_params'] = [self.process_params] * processed_df.shape[0]
+        processed_df['model_params'] = [anom_dict] * processed_df.shape[0]
         
         return processed_df
 
 # COMMAND ----------
 
-ae = AnomalyEvent(df1, 'TimeFK_Event_Date')
-ae.process_df('count', df_col_dict={'df_col':'ACLED_Event_Type', 'col_val':'Protests'}, date_filter={'start_date':dt.datetime(2021,1,1), 'end_date':dt.datetime(2023,1,31)})
+# instantiate
+ae = AnomalyEvent(df, 'TimeFK_Event_Date')
+# process
+ae.process_df({'tgt_col':'ACLED_PK', 'agg_typ':'count'}, 'W', filter_dict={'ACLED_Event_Type':['Protests']}, date_dict={'start_date':dt.datetime(2021,1,1), 'end_date':dt.datetime(2023,1,31)})
 
 # COMMAND ----------
 
-iso = ae.get_anomaly('D', 'iso', {'contamination':.5})
+# iso
+iso = ae.get_anomaly('iso', {'contamination':.5})
 iso
 
 # COMMAND ----------
 
-rw = ae.get_anomaly('D', 'rw', {'window': 30, 'c': 1.5, 'side':'positive'})
+# rolling window
+rw = ae.get_anomaly('rw', {'window': 30, 'c': 1.5, 'side':'positive'})
 rw
 
 # COMMAND ----------
