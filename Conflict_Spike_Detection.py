@@ -81,10 +81,9 @@ class AnomalyEvent:
     def process_df(self, target_dict, time_intvl, filter_dict={}, date_dict={}):
         ##### filter
         # filter to subset of data by date
+        df = self.df.copy()
         if len(date_dict) != 0:
-            df = self.df.loc[(self.df[self.date_col] >= date_dict['start_date']) & (self.df[self.date_col] <= date_dict['end_date']), :]
-        else:
-            df = self.df
+            df = df.loc[(df[self.date_col] >= date_dict['start_date']) & (df[self.date_col] <= date_dict['end_date']), :]
 
         # filter to subset of data by column values
         for col, val_lst in filter_dict.items():
