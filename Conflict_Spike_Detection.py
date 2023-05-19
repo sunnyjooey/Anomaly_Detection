@@ -10,6 +10,7 @@
 
 !pip install statsmodels
 !pip install adtk
+!pip install openpyxl
 
 # COMMAND ----------
 
@@ -24,6 +25,9 @@ import adtk
 from adtk.detector import PersistAD
 from adtk.visualization import plot
 from sklearn.ensemble import IsolationForest
+from statsmodels.discrete.count_model import ZeroInflatedNegativeBinomialP as ZINB
+from statsmodels.discrete.count_model import ZeroInflatedPoisson as ZINP
+from patsy import dmatrices
 
 # COMMAND ----------
 
@@ -33,7 +37,7 @@ from pyspark.dbutils import DBUtils
 spark = SparkSession.builder.getOrCreate()
 dbutils = DBUtils(spark)
 
-database_host = dbutils.secrets.get(scope='warehouse_scope', key='database_host')
+database_host = dbutils.secrets.get(scope='warehouse_scope', key='database_host') #host
 database_port = dbutils.secrets.get(scope='warehouse_scope', key='database_port')
 user = dbutils.secrets.get(scope='warehouse_scope', key='user')
 password = dbutils.secrets.get(scope='warehouse_scope', key='password')
@@ -42,14 +46,30 @@ database_name = "UNDP_DW_CRD"
 table = "dbo.CRD_ACLED"
 url = f"jdbc:sqlserver://{database_host}:{database_port};databaseName={database_name};"
 
+
+# COMMAND ----------
+
 df1 = (spark.read
-  .format("com.microsoft.sqlserver.jdbc.spark")
-  .option("url", url)
-  .option("dbtable", table)
-  .option("user", user)
-  .option("password", password)
+  .format("com.microsoft.sqlserver")
+  .option("host", "hostName")
+  .option("port", "port") # optional, can use default port 1433 if omitted
+  .option("user", "username")
+  .option("password", "password")
+  .option("database", "databaseName")
+  .option("dbtable", "schemaName.tableName") # (if schemaName not provided, default to "dbo")
   .load()
 )
+
+# COMMAND ----------
+
+df1 = (spark.read
+    .format("com.microsoft.sqlserver.jdbc.spark")
+    .option("url", url)
+    .option("dbtable", table)
+    .option("user", user)
+    .option("password", password)
+    .load()
+ )
 
 df1 = df1.filter(df1.CountryFK==201)
 df = df1.toPandas()
@@ -57,13 +77,20 @@ df = df1.toPandas()
 # COMMAND ----------
 
 #### Functions ###
-# Convert ACLED Dates to pd
 def convert_dt(value):
     valstr = str(value)
     date_clean = dt.datetime(year=int(valstr[0:4]), month=int(valstr[4:6]), day=int(valstr[6:8]))
     return date_clean
 
 df['TimeFK_Event_Date'] = df['TimeFK_Event_Date'].apply(lambda x: convert_dt(x))
+
+# COMMAND ----------
+
+#use undss data as acled datawarehouse is down 
+df = pd.read_excel('/dbfs/FileStore/df/undss/data/sahel_incident_data.xlsx')
+# change date column to datetime
+df.loc[:, 'Date'] = pd.to_datetime(df['Date'])
+df1 = df[df['Country'] == 'NIGER']
 
 # COMMAND ----------
 
@@ -123,7 +150,7 @@ class AnomalyEvent:
             fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(10,10))
             ax.hist(self.processed_df, density=True, bins=30, alpha=0.5)
             ax.set_title('Density Plot')
-            ax.axvline(self.processed['num'].mean(), color='red', linestyle='--')
+           # ax.axvline(self.processed['num'].mean(), color='red', linestyle='--')
             ax.text(self.processed_df['num'].mean(), 0.025, f'Mean:{self.processed_df["num"].mean():.2f}', rotation=90)    
             plt.show()
             plt.close()
@@ -155,30 +182,124 @@ class AnomalyEvent:
         
         return processed_df
     
-    def zero_negbin(self, lag=1, min_obs=30, plot=False)
+    def zero_negbin(self, lag=1, min_obs=30):
         if self.processed_df is not None:
-        processed_df = self.pprocessed_df.copy()
-        if len(processed_df) > min_obs:
-            if processed_df['num'].nunique()>1:
-                #store lag cols and formula 
-                expr = """num ~ """
-                lag_cols=[] #list of column names 
-                for i in range(1, lag+1):
-                    colname=f"num_lag{i}"
-                    processed_df[colname]=processed_df["num"].shift(i)
-                    lag_cols.append(colname)
-                lag_col_expr = "+".join(lag_cols)
-                expr += lag_col_expr 
+            processed_df = self.processed_df.copy()
+            if len(processed_df) > min_obs:
+                if processed_df['num'].nunique()>1:
+                    #store lag cols and formula 
+                    expr = """num ~ """
+                    lag_cols=[] #list of column names 
+                    for i in range(1, lag+1):
+                        colname=f"num_lag{i}"
+                        processed_df[colname]=processed_df["num"].shift(i)
+                        lag_cols.append(colname)
+                    lag_col_expr = "+".join(lag_cols)
+                    expr += lag_col_expr 
 
-                y,X = dmatrices(expr, processed_df, return_type='dataframe')
+                    y,X = dmatrices(expr, processed_df, return_type='dataframe')
 
-                #catch-all try statement 
-                try:
-                    zinb_res= ZINB(y,X).fit(maxiter=500)
-                    #test pred on test and calc RMSE
-                    print(zinb_res.summary())
+                    #catch-all try statement 
+                    try:
+                        zinb_res= ZINB(y,X).fit(maxiter=500)
+                        pred_values = zinb_res.predict()
+                        resid = zinb_res.resid
+                        print(resid)
+                       # window_size = 10
+                        #threshold_factor = 2 
+                       # moving_avg = resid.rolling(window=window_size).mean()
+                        #threshold = moving_avg + threshold_factor * moving_avg.std()
+                        threshold = resid.std()*2 #look at other thresholds 
+
+                        processed_df.reset_index(drop=True, inplace=True)
+                        resid.reset_index(drop=True, inplace=True)
+
+
+                        #subset
+                        anomaly_df = pd.DataFrame({'Anomaly': (resid.abs() > threshold).astype(int)})
+                        print(anomaly_df)
+
+                        processed_df = pd.concat([processed_df, anomaly_df], axis=1)
+                        print(processed_df)
+
+                        plt.figure(figsize=(10, 6))
+                        plt.plot(processed_df.index, processed_df['num'], label='Original')
+                        plt.scatter(processed_df[processed_df['Anomaly'] == 1].index, processed_df[processed_df['Anomaly'] == 1]['num'], color='red', label='Anomalies', marker='o')
+                        plt.xlabel('Time')
+                        plt.ylabel('Count')
+                        plt.title('Time Series with Anomalies')
+                        plt.legend()
+                        plt.show() 
+
+                    except:
+                        print("Error occurred during model fitting ")    
+
+                else:
+                    print("not enough unique values") 
+                    return processed_df
                 
-                return processed_df 
+                    
+            else:
+                print('Not enough values')  
+                return processed_df  
+            
+                
+        else:
+            raise Exception("Use 'process_df' to process the data first")
+
+
+    def zero_poisson(self, lag=1, min_obs=30):
+        if self.processed_df is not None:
+            processed_df = self.processed_df.copy()
+            if len(processed_df) > min_obs:
+                if processed_df['num'].nunique() > 1:
+                    #store lag cols and formula
+                    expr= """ num ~ """
+                    lag_cols= []
+                    for i in range(1, lag+1):
+                        colname=f"num_lag{i}"
+                        processed_df[colname] = processed_df["num"].shift(i)
+                        lag_cols.append(colname)
+                    lag_col_expr = "+".join(lag_cols)
+                    expr += lag_col_expr 
+
+                    y,X = dmatrices(expr, processed_df, return_type='dataframe')
+
+                    try:
+                        zinb_res= ZINP(y,X).fit(maxiter=500)
+                        #test pred on test and calc RMSE
+                        pred_values = zinb_res.predict()
+                        resid = zinb_res.resid
+                        threshold = resid.std()*2
+                        #anomalies = processed_df[resid.abs() > threshold]
+                        #print(anomalies)
+
+                        # Plot the time series with anomalies highlighted
+                        #plt.figure(figsize=(10, 6))
+                        #plt.plot(processed_df.index, processed_df['num'], label='Original')
+                        #plt.scatter(anomalies.index, anomalies['num'], color='red', label='Anomalies')
+                        #plt.xlabel('Time')
+                        #plt.ylabel('Count')
+                        #plt.title('Time Series with Anomalies')
+                        #plt.legend()
+                        #plt.show()
+            
+                    except:
+                        print("Error occurred during model fitting ")        
+            else:
+                print("not enough unique values") 
+                return processed_df     
+        else: 
+            print("Not enough values")
+            return processed_df
+        
+
+# COMMAND ----------
+
+ae = AnomalyEvent(df1, 'Date')
+ae.process_df({'tgt_col':'RecordID', 'agg_typ':'count'}, 'W',filter_dict={'STA': ['Crime', 'Terrorism', 'Armed Conflict']}, date_dict={'start_date':dt.datetime(2018,1,1), 'end_date':dt.datetime(2023,1,31)})
+ae.check_zeros()
+ae.zero_negbin()
 
 # COMMAND ----------
 
@@ -186,6 +307,8 @@ class AnomalyEvent:
 ae = AnomalyEvent(df, 'TimeFK_Event_Date')
 # process
 ae.process_df({'tgt_col':'ACLED_PK', 'agg_typ':'count'}, 'W', filter_dict={'ACLED_Event_Type':['Protests']}, date_dict={'start_date':dt.datetime(2021,1,1), 'end_date':dt.datetime(2023,1,31)})
+ae.check_zeros()
+ae.zero_negbin()
 
 # COMMAND ----------
 
