@@ -53,7 +53,6 @@ df1 = (spark.read
 
 df1 = df1.filter(df1.CountryFK==201)
 df = df1.toPandas()
-#testing
 
 # COMMAND ----------
 
@@ -115,6 +114,19 @@ class AnomalyEvent:
         self.processed_df = process_df
         self.process_params = target_dict
     
+    def check_zeros(self):
+        if self.processed_df is None:
+            raise Exception("'process_df' first!")
+        else:
+            processed_df = self.processed_df.copy()
+            #plot density of data 
+            fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(10,10))
+            ax.hist(self.processed_df, density=True, bins=30, alpha=0.5)
+            ax.set_title('Density Plot')
+            ax.axvline(self.processed['num'].mean(), color='red', linestyle='--')
+            ax.text(self.processed_df['num'].mean(), 0.025, f'Mean:{self.processed_df["num"].mean():.2f}', rotation=90)    
+            plt.show()
+            plt.close()
     
     def get_anomaly(self, anom, anom_dict, graph=True):
         if self.processed_df is None:
@@ -142,6 +154,31 @@ class AnomalyEvent:
         processed_df['model_params'] = [anom_dict] * processed_df.shape[0]
         
         return processed_df
+    
+    def zero_negbin(self, lag=1, min_obs=30, plot=False)
+        if self.processed_df is not None:
+        processed_df = self.pprocessed_df.copy()
+        if len(processed_df) > min_obs:
+            if processed_df['num'].nunique()>1:
+                #store lag cols and formula 
+                expr = """num ~ """
+                lag_cols=[] #list of column names 
+                for i in range(1, lag+1):
+                    colname=f"num_lag{i}"
+                    processed_df[colname]=processed_df["num"].shift(i)
+                    lag_cols.append(colname)
+                lag_col_expr = "+".join(lag_cols)
+                expr += lag_col_expr 
+
+                y,X = dmatrices(expr, processed_df, return_type='dataframe')
+
+                #catch-all try statement 
+                try:
+                    zinb_res= ZINB(y,X).fit(maxiter=500)
+                    #test pred on test and calc RMSE
+                    print(zinb_res.summary())
+                
+                return processed_df 
 
 # COMMAND ----------
 
