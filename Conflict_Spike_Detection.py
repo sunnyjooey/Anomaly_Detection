@@ -50,19 +50,6 @@ url = f"jdbc:sqlserver://{database_host}:{database_port};databaseName={database_
 # COMMAND ----------
 
 df1 = (spark.read
-  .format("com.microsoft.sqlserver")
-  .option("host", "hostName")
-  .option("port", "port") # optional, can use default port 1433 if omitted
-  .option("user", "username")
-  .option("password", "password")
-  .option("database", "databaseName")
-  .option("dbtable", "schemaName.tableName") # (if schemaName not provided, default to "dbo")
-  .load()
-)
-
-# COMMAND ----------
-
-df1 = (spark.read
     .format("com.microsoft.sqlserver.jdbc.spark")
     .option("url", url)
     .option("dbtable", table)
@@ -83,6 +70,10 @@ def convert_dt(value):
     return date_clean
 
 df['TimeFK_Event_Date'] = df['TimeFK_Event_Date'].apply(lambda x: convert_dt(x))
+
+# COMMAND ----------
+
+df
 
 # COMMAND ----------
 
@@ -150,7 +141,7 @@ class AnomalyEvent:
             fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(10,10))
             ax.hist(self.processed_df, density=True, bins=30, alpha=0.5)
             ax.set_title('Density Plot')
-           # ax.axvline(self.processed['num'].mean(), color='red', linestyle='--')
+            ax.axvline(self.processed_df['num'].mean(), color='red', linestyle='--')
             ax.text(self.processed_df['num'].mean(), 0.025, f'Mean:{self.processed_df["num"].mean():.2f}', rotation=90)    
             plt.show()
             plt.close()
@@ -204,32 +195,49 @@ class AnomalyEvent:
                         zinb_res= ZINB(y,X).fit(maxiter=500)
                         pred_values = zinb_res.predict()
                         resid = zinb_res.resid
+                        #threshold = resid.std()*2
+                        #threshold = np.mean(resid) + 3 * np.std(resid)
+                        # Set rolling window size
+                        window_size = 10
+
+                        # Calculate dynamic threshold using rolling window
+                        rolling_mean = resid.rolling(window=window_size, min_periods=1).mean()
+                        rolling_std = resid.rolling(window=window_size, min_periods=1).std()
+
+                        thresholds = rolling_mean +3 * rolling_std
+                        thresholds = thresholds.replace([np.inf, -np.inf], np.nan) 
+                        mean_threshold = thresholds.mean()
+                        thresholds = thresholds.fillna(mean_threshold)
+                        #print(thresholds)
+                        
+                        #processed_df.reset_index(drop=True, inplace=True)
+                        print(processed_df)
                         print(resid)
-                       # window_size = 10
-                        #threshold_factor = 2 
-                       # moving_avg = resid.rolling(window=window_size).mean()
-                        #threshold = moving_avg + threshold_factor * moving_avg.std()
-                        threshold = resid.std()*2 #look at other thresholds 
 
-                        processed_df.reset_index(drop=True, inplace=True)
-                        resid.reset_index(drop=True, inplace=True)
-
-
-                        #subset
-                        anomaly_df = pd.DataFrame({'Anomaly': (resid.abs() > threshold).astype(int)})
-                        print(anomaly_df)
-
-                        processed_df = pd.concat([processed_df, anomaly_df], axis=1)
+                        # Create a new column in the DataFrame to indicate anomalies
+                        anomalies = pd.DataFrame(((resid > 0) & (np.abs(resid) > thresholds)), index=thresholds.index)
+                        print(anomalies)
+                        processed_df = pd.concat([processed_df, anomalies], axis=1)
+                        processed_df = processed_df.rename(columns={0: 'anomalies'})
+                        column_names = processed_df.columns
+                        print(column_names)
+                        processed_df['anomalies'] = processed_df['anomalies'].fillna(0)
                         print(processed_df)
 
                         plt.figure(figsize=(10, 6))
                         plt.plot(processed_df.index, processed_df['num'], label='Original')
-                        plt.scatter(processed_df[processed_df['Anomaly'] == 1].index, processed_df[processed_df['Anomaly'] == 1]['num'], color='red', label='Anomalies', marker='o')
+                        plt.scatter(processed_df[processed_df['anomalies'] == 1.0].index, processed_df[processed_df['anomalies'] == 1.0]['num'], color='red', label='Anomalies', marker='o')
                         plt.xlabel('Time')
                         plt.ylabel('Count')
                         plt.title('Time Series with Anomalies')
                         plt.legend()
                         plt.show() 
+                        
+                        #save params 
+                        processed_df['process_params'] = [self.process_params] * processed_df.shape[0]
+                        processed_df['model_params'] = [model_params] * processed_df.shape[0]
+                        
+
 
                     except:
                         print("Error occurred during model fitting ")    
@@ -266,32 +274,62 @@ class AnomalyEvent:
                     y,X = dmatrices(expr, processed_df, return_type='dataframe')
 
                     try:
-                        zinb_res= ZINP(y,X).fit(maxiter=500)
+                        zinp_res= ZINP(y,X).fit(maxiter=500)
                         #test pred on test and calc RMSE
-                        pred_values = zinb_res.predict()
-                        resid = zinb_res.resid
-                        threshold = resid.std()*2
-                        #anomalies = processed_df[resid.abs() > threshold]
-                        #print(anomalies)
+                        pred_values = zinp_res.predict()
+                        resid = zinp_res.resid
+                        #threshold = np.mean(resid) + 3 * np.std(resid)
+                        window_size = 10
 
-                        # Plot the time series with anomalies highlighted
-                        #plt.figure(figsize=(10, 6))
-                        #plt.plot(processed_df.index, processed_df['num'], label='Original')
-                        #plt.scatter(anomalies.index, anomalies['num'], color='red', label='Anomalies')
-                        #plt.xlabel('Time')
-                        #plt.ylabel('Count')
-                        #plt.title('Time Series with Anomalies')
-                        #plt.legend()
-                        #plt.show()
-            
+                        # Calculate dynamic threshold using rolling window
+                        rolling_mean = resid.rolling(window=window_size, min_periods=1).mean()
+                        rolling_std = resid.rolling(window=window_size, min_periods=1).std()
+
+                        thresholds = rolling_mean +3 * rolling_std
+                        thresholds = thresholds.replace([np.inf, -np.inf], np.nan) 
+                        mean_threshold = thresholds.mean()
+                        thresholds = thresholds.fillna(mean_threshold)
+                        print(thresholds)
+                        
+                        #processed_df.reset_index(drop=True, inplace=True)
+                        print(processed_df)
+                        print(resid)
+
+                        # Create a new column in the DataFrame to indicate anomalies
+                        anomalies = pd.DataFrame(np.where((np.abs(resid) > thresholds), 1, 0))
+                        print(anomalies)
+                        processed_df = pd.concat([processed_df, anomalies], axis=1)
+                        processed_df = processed_df.rename(columns={0: 'anomalies'})
+                        column_names = processed_df.columns
+                        print(column_names)
+                        processed_df['anomalies'] = processed_df['anomalies'].fillna(0)
+                        print(processed_df)
+
+                        plt.figure(figsize=(10, 6))
+                        plt.plot(processed_df.index, processed_df['num'], label='Original')
+                        plt.scatter(processed_df[processed_df['anomalies'] == 1.0].index, processed_df[processed_df['anomalies'] == 1.0]['num'], color='red', label='Anomalies', marker='o')
+                        plt.xlabel('Time')
+                        plt.ylabel('Count')
+                        plt.title('Time Series with Anomalies')
+                        plt.legend()
+                        plt.show()
+                        
+                        
+                        #save params 
+                        processed_df['process_params'] = [self.process_params] * processed_df.shape[0]
+                        processed_df['model_params'] = [model_params] * processed_df.shape[0] 
+
                     except:
-                        print("Error occurred during model fitting ")        
+                        print("Error occurred during model fitting ")    
+
+                else:
+                    print("not enough unique values") 
+                    return processed_df
+                
+                    
             else:
-                print("not enough unique values") 
-                return processed_df     
-        else: 
-            print("Not enough values")
-            return processed_df
+                print('Not enough values')  
+                return processed_df  
         
 
 # COMMAND ----------
@@ -306,9 +344,10 @@ ae.zero_negbin()
 # instantiate
 ae = AnomalyEvent(df, 'TimeFK_Event_Date')
 # process
-ae.process_df({'tgt_col':'ACLED_PK', 'agg_typ':'count'}, 'W', filter_dict={'ACLED_Event_Type':['Protests']}, date_dict={'start_date':dt.datetime(2021,1,1), 'end_date':dt.datetime(2023,1,31)})
+ae.process_df({'tgt_col':'ACLED_PK', 'agg_typ':'count'}, 'W', filter_dict={'ACLED_Event_Type':['Protests']}, date_dict={'start_date':dt.datetime(2014,1,1), 'end_date':dt.datetime(2023,1,31)})
 ae.check_zeros()
 ae.zero_negbin()
+#ae.zero_poisson()
 
 # COMMAND ----------
 
@@ -321,7 +360,3 @@ iso
 # rolling window
 rw = ae.get_anomaly('rw', {'window': 30, 'c': 1.5, 'side':'positive'})
 rw
-
-# COMMAND ----------
-
-
