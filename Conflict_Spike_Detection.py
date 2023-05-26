@@ -78,10 +78,10 @@ df
 # COMMAND ----------
 
 #use undss data as acled datawarehouse is down 
-df = pd.read_excel('/dbfs/FileStore/df/undss/data/sahel_incident_data.xlsx')
+undss = pd.read_excel('/dbfs/FileStore/df/undss/data/sahel_incident_data.xlsx')
 # change date column to datetime
-df.loc[:, 'Date'] = pd.to_datetime(df['Date'])
-df1 = df[df['Country'] == 'NIGER']
+undss.loc[:, 'Date'] = pd.to_datetime(undss['Date'])
+undss = undss[undss ['Country'] == 'NIGER']
 
 # COMMAND ----------
 
@@ -94,9 +94,10 @@ class AnomalyEvent:
             raise Exception("The 'date_col' must be a datetime column")
         self.processed_df = None
         self.process_params = None
+        self.model = None #add model attribute
 
     
-    def process_df(self, target_dict, time_intvl, filter_dict={}, date_dict={}):
+    def process_df(self, target_dict, time_intvl, filter_dict={}, date_dict={}, model="rbf"):
         ##### filter
         # filter to subset of data by date
         df = self.df.copy()
@@ -131,6 +132,7 @@ class AnomalyEvent:
         ##### set attribute
         self.processed_df = process_df
         self.process_params = target_dict
+        self.model = model #model attribute
     
     def check_zeros(self):
         if self.processed_df is None:
@@ -195,38 +197,30 @@ class AnomalyEvent:
                         zinb_res= ZINB(y,X).fit(maxiter=500)
                         pred_values = zinb_res.predict()
                         resid = zinb_res.resid
-                        #threshold = resid.std()*2
-                        #threshold = np.mean(resid) + 3 * np.std(resid)
-                        # Set rolling window size
-                        window_size = 10
+                        threshold = np.mean(resid) + 3 * np.std(resid)
 
-                        # Calculate dynamic threshold using rolling window
-                        rolling_mean = resid.rolling(window=window_size, min_periods=1).mean()
-                        rolling_std = resid.rolling(window=window_size, min_periods=1).std()
-
-                        thresholds = rolling_mean +3 * rolling_std
-                        thresholds = thresholds.replace([np.inf, -np.inf], np.nan) 
-                        mean_threshold = thresholds.mean()
-                        thresholds = thresholds.fillna(mean_threshold)
+                        # Set rolling window size, Calculate dynamic threshold using rolling window
+                        #window_size = 10
+                        #rolling_mean = resid.rolling(window=window_size, min_periods=1).mean()
+                        #rolling_std = resid.rolling(window=window_size, min_periods=1).std()
+                        #thresholds = rolling_mean +3 * rolling_std
+                        #thresholds = thresholds.replace([np.inf, -np.inf], np.nan) 
+                        #mean_threshold = thresholds.mean()
+                        #thresholds = thresholds.fillna(mean_threshold)
                         #print(thresholds)
-                        
                         #processed_df.reset_index(drop=True, inplace=True)
-                        print(processed_df)
-                        print(resid)
+                        #anomalies = pd.DataFrame(((resid > 0) & (np.abs(resid) > threshold)), index=thresholds.index)
 
                         # Create a new column in the DataFrame to indicate anomalies
-                        anomalies = pd.DataFrame(((resid > 0) & (np.abs(resid) > thresholds)), index=thresholds.index)
-                        print(anomalies)
+                        anomalies = pd.DataFrame(np.abs(resid)> threshold)
                         processed_df = pd.concat([processed_df, anomalies], axis=1)
                         processed_df = processed_df.rename(columns={0: 'anomalies'})
-                        column_names = processed_df.columns
-                        print(column_names)
-                        processed_df['anomalies'] = processed_df['anomalies'].fillna(0)
-                        print(processed_df)
+                        processed_df['anomalies'] = processed_df['anomalies'].fillna('False')
 
+                        # plot 
                         plt.figure(figsize=(10, 6))
                         plt.plot(processed_df.index, processed_df['num'], label='Original')
-                        plt.scatter(processed_df[processed_df['anomalies'] == 1.0].index, processed_df[processed_df['anomalies'] == 1.0]['num'], color='red', label='Anomalies', marker='o')
+                        plt.scatter(processed_df[processed_df['anomalies'] == True].index, processed_df[processed_df['anomalies'] == True]['num'], color='red', label='Anomalies', marker='o')
                         plt.xlabel('Time')
                         plt.ylabel('Count')
                         plt.title('Time Series with Anomalies')
@@ -234,8 +228,10 @@ class AnomalyEvent:
                         plt.show() 
                         
                         #save params 
+                        model_params = zinb_res.params 
                         processed_df['process_params'] = [self.process_params] * processed_df.shape[0]
                         processed_df['model_params'] = [model_params] * processed_df.shape[0]
+                        return processed_df
                         
 
 
@@ -278,47 +274,39 @@ class AnomalyEvent:
                         #test pred on test and calc RMSE
                         pred_values = zinp_res.predict()
                         resid = zinp_res.resid
-                        #threshold = np.mean(resid) + 3 * np.std(resid)
-                        window_size = 10
-
-                        # Calculate dynamic threshold using rolling window
-                        rolling_mean = resid.rolling(window=window_size, min_periods=1).mean()
-                        rolling_std = resid.rolling(window=window_size, min_periods=1).std()
-
-                        thresholds = rolling_mean +3 * rolling_std
-                        thresholds = thresholds.replace([np.inf, -np.inf], np.nan) 
-                        mean_threshold = thresholds.mean()
-                        thresholds = thresholds.fillna(mean_threshold)
-                        print(thresholds)
+                        threshold = np.mean(resid) + 3 * np.std(resid)
                         
+                        # Calculate dynamic threshold using rolling window
+                        #window_size = 10
+                        #rolling_mean = resid.rolling(window=window_size, min_periods=1).mean()
+                        #rolling_std = resid.rolling(window=window_size, min_periods=1).std()
+                        #thresholds = rolling_mean +3 * rolling_std
+                        #thresholds = thresholds.replace([np.inf, -np.inf], np.nan) 
+                        #mean_threshold = thresholds.mean()
+                        #thresholds = thresholds.fillna(mean_threshold)
+                        #print(thresholds)
                         #processed_df.reset_index(drop=True, inplace=True)
-                        print(processed_df)
-                        print(resid)
+                        #anomalies = pd.DataFrame(np.where((np.abs(resid) > thresholds), 1, 0))
 
                         # Create a new column in the DataFrame to indicate anomalies
-                        anomalies = pd.DataFrame(np.where((np.abs(resid) > thresholds), 1, 0))
-                        print(anomalies)
+                        anomalies = pd.DataFrame(np.abs(resid)> threshold)
                         processed_df = pd.concat([processed_df, anomalies], axis=1)
                         processed_df = processed_df.rename(columns={0: 'anomalies'})
-                        column_names = processed_df.columns
-                        print(column_names)
-                        processed_df['anomalies'] = processed_df['anomalies'].fillna(0)
-                        print(processed_df)
-
+                        processed_df['anomalies'] = processed_df['anomalies'].fillna('False')
                         plt.figure(figsize=(10, 6))
                         plt.plot(processed_df.index, processed_df['num'], label='Original')
-                        plt.scatter(processed_df[processed_df['anomalies'] == 1.0].index, processed_df[processed_df['anomalies'] == 1.0]['num'], color='red', label='Anomalies', marker='o')
+                        plt.scatter(processed_df[processed_df['anomalies'] == True].index, processed_df[processed_df['anomalies'] == True]['num'], color='red', label='Anomalies', marker='o')
                         plt.xlabel('Time')
                         plt.ylabel('Count')
                         plt.title('Time Series with Anomalies')
                         plt.legend()
-                        plt.show()
-                        
+                        plt.show() 
                         
                         #save params 
+                        model_params = zinp_res.params 
                         processed_df['process_params'] = [self.process_params] * processed_df.shape[0]
-                        processed_df['model_params'] = [model_params] * processed_df.shape[0] 
-
+                        processed_df['model_params'] = [model_params] * processed_df.shape[0]
+                        return processed_df
                     except:
                         print("Error occurred during model fitting ")    
 
@@ -334,19 +322,22 @@ class AnomalyEvent:
 
 # COMMAND ----------
 
-ae = AnomalyEvent(df1, 'Date')
-ae.process_df({'tgt_col':'RecordID', 'agg_typ':'count'}, 'W',filter_dict={'STA': ['Crime', 'Terrorism', 'Armed Conflict']}, date_dict={'start_date':dt.datetime(2018,1,1), 'end_date':dt.datetime(2023,1,31)})
-ae.check_zeros()
-ae.zero_negbin()
-
-# COMMAND ----------
-
+#ACLED DATA
 # instantiate
 ae = AnomalyEvent(df, 'TimeFK_Event_Date')
 # process
-ae.process_df({'tgt_col':'ACLED_PK', 'agg_typ':'count'}, 'W', filter_dict={'ACLED_Event_Type':['Protests']}, date_dict={'start_date':dt.datetime(2014,1,1), 'end_date':dt.datetime(2023,1,31)})
-ae.check_zeros()
+ae.process_df({'tgt_col':'ACLED_PK', 'agg_typ':'count'}, 'W', filter_dict={'ACLED_Event_Type':['Protests']}, date_dict={'start_date':dt.datetime(2021,1,1), 'end_date':dt.datetime(2023,1,31)})
+#ae.check_zeros()
 ae.zero_negbin()
+#ae.zero_poisson()
+
+# COMMAND ----------
+
+#UNDSS data 
+ae = AnomalyEvent(undss, 'Date')
+ae.process_df({'tgt_col':'RecordID', 'agg_typ':'count'}, 'W',filter_dict={'STA': ['Crime', 'Terrorism', 'Armed Conflict']}, date_dict={'start_date':dt.datetime(2014,1,1), 'end_date':dt.datetime(2023,1,31)})
+ae.check_zeros()
+#ae.zero_negbin()
 #ae.zero_poisson()
 
 # COMMAND ----------
