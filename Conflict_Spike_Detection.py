@@ -293,6 +293,8 @@ class AnomalyEvent:
                         processed_df = pd.concat([processed_df, anomalies], axis=1)
                         processed_df = processed_df.rename(columns={0: 'anomalies'})
                         processed_df['anomalies'] = processed_df['anomalies'].fillna('False')
+
+                        #plot
                         plt.figure(figsize=(10, 6))
                         plt.plot(processed_df.index, processed_df['num'], label='Original')
                         plt.scatter(processed_df[processed_df['anomalies'] == True].index, processed_df[processed_df['anomalies'] == True]['num'], color='red', label='Anomalies', marker='o')
