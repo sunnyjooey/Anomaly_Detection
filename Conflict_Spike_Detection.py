@@ -175,7 +175,16 @@ class AnomalyEvent:
         
         return processed_df
     
+
     def zero_negbin(self, lag=1, min_obs=30):
+        """ anomaly detection using zero inflated neg binomial model on time series
+        args:
+        lags: number of lafs to include in model
+        min_obs: min number of obss to perform model
+
+        returns:
+        processed_df: DF with added columns with boolean FALSE/TRUE for anomalies 
+        """
         if self.processed_df is not None:
             processed_df = self.processed_df.copy()
             if len(processed_df) > min_obs:
@@ -189,7 +198,7 @@ class AnomalyEvent:
                         lag_cols.append(colname)
                     lag_col_expr = "+".join(lag_cols)
                     expr += lag_col_expr 
-
+                    # Prepare the response and predictor variables for model fitting
                     y,X = dmatrices(expr, processed_df, return_type='dataframe')
 
                     #catch-all try statement 
@@ -199,7 +208,7 @@ class AnomalyEvent:
                         resid = zinb_res.resid
                         threshold = np.mean(resid) + 3 * np.std(resid)
 
-                        # Set rolling window size, Calculate dynamic threshold using rolling window
+                        # Set rolling window size, Calculate dynamic threshold using rolling window, couldnt make this work so hashed it out for now
                         #window_size = 10
                         #rolling_mean = resid.rolling(window=window_size, min_periods=1).mean()
                         #rolling_std = resid.rolling(window=window_size, min_periods=1).std()
@@ -253,6 +262,15 @@ class AnomalyEvent:
 
 
     def zero_poisson(self, lag=1, min_obs=30):
+    
+""" anomaly detection using zero inflated poisson model on time series
+        args:
+        lags: number of lafs to include in model
+        min_obs: min number of obss to perform model
+
+        returns:
+        processed_df: DF with added columns with boolean FALSE/TRUE for anomalies 
+        """
         if self.processed_df is not None:
             processed_df = self.processed_df.copy()
             if len(processed_df) > min_obs:
@@ -266,7 +284,8 @@ class AnomalyEvent:
                         lag_cols.append(colname)
                     lag_col_expr = "+".join(lag_cols)
                     expr += lag_col_expr 
-
+                    
+                     # Attempt to fit a zero-inflated Poisson model
                     y,X = dmatrices(expr, processed_df, return_type='dataframe')
 
                     try:
@@ -328,10 +347,11 @@ class AnomalyEvent:
 # instantiate
 ae = AnomalyEvent(df, 'TimeFK_Event_Date')
 # process
-ae.process_df({'tgt_col':'ACLED_PK', 'agg_typ':'count'}, 'W', filter_dict={'ACLED_Event_Type':['Protests']}, date_dict={'start_date':dt.datetime(2021,1,1), 'end_date':dt.datetime(2023,1,31)})
+ae.process_df({'tgt_col':'ACLED_PK', 'agg_typ':'count'}, 'W', filter_dict={'ACLED_Event_Type':['Protests']}, date_dict={'start_date':dt.datetime(2019,1,1), 'end_date':dt.datetime(2023,1,31)})
 #ae.check_zeros()
+#not too different from each other, very similar, 1/2 difference in anomaly detection
 ae.zero_negbin()
-#ae.zero_poisson()
+ae.zero_poisson() 
 
 # COMMAND ----------
 
